@@ -2,12 +2,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from pydantic import BaseModel
-from typing import List
 from database import SessionLocal, Sismo, crear_tablas, guardar_sismos
 from fetch_sismos import obtener_sismos_con_coords
-from fastapi.exceptions import ResponseValidationError
-from fastapi.responses import JSONResponse
 
 app = FastAPI(
     title="API Sismos Chile",
@@ -24,47 +20,44 @@ app.add_middleware(
 crear_tablas()
 
 
-# ── Esquema Pydantic ────────────────────────────────────
-class SismoOut(BaseModel):
-    id:             int
-    fecha:          str
-    magnitud:       float
-    profundidad_km: int
-    referencia:     str
-    ciudad:         str
-    lat:            float | None
-    lon:            float | None
-    clasificacion:  str
-    class Config: from_attributes = True
+# ── Helper para serializar un objeto Sismo a dict ───────
+def sismo_a_dict(s):
+    return {
+        "id":             s.id,
+        "fecha":          s.fecha,
+        "magnitud":       s.magnitud,
+        "profundidad_km": s.profundidad_km,
+        "referencia":     s.referencia,
+        "ciudad":         s.ciudad,
+        "lat":            s.lat,
+        "lon":            s.lon,
+        "clasificacion":  s.clasificacion,
+    }
 
 
 # ── Endpoints ───────────────────────────────────────────
-
-
-
-@app.exception_handler(ResponseValidationError)
-async def validation_exception_handler(request, exc):
-    print("VALIDATION ERROR:", exc.errors())
-    return JSONResponse(status_code=500, content={"detail": str(exc.errors())})
 
 @app.get("/")
 def health():
     return {"estado": "online", "api": "Sismos Chile 🌋"}
 
 
-@app.get("/sismos", response_model=List[SismoOut])
+@app.get("/sismos")
 def listar(
     limit:   int   = Query(20,  ge=1,   le=200),
     min_mag: float = Query(0.0, ge=0.0),
 ):
     db = SessionLocal()
     try:
-        return db.query(Sismo)\
+        rows = db.query(Sismo)\
                  .filter(Sismo.magnitud >= min_mag)\
                  .order_by(Sismo.id.desc()).limit(limit).all()
-    finally: db.close()
+        return [sismo_a_dict(r) for r in rows]
+    finally:
+        db.close()
 
 
+# ⚠️ IMPORTANTE: rutas específicas ANTES de /sismos/{id}
 @app.get("/sismos/geojson")
 def geojson(min_mag: float = Query(0.0, ge=0.0)):
     db = SessionLocal()
@@ -72,51 +65,82 @@ def geojson(min_mag: float = Query(0.0, ge=0.0)):
         sismos = db.query(Sismo)\
                    .filter(Sismo.lat != None, Sismo.magnitud >= min_mag)\
                    .order_by(Sismo.id.desc()).all()
-
         features = []
         for s in sismos:
             features.append({
                 "type": "Feature",
                 "geometry": {
                     "type":        "Point",
-                    "coordinates": [s.lon, s.lat], 
+                    "coordinates": [s.lon, s.lat],
                 },
                 "properties": {
-                    "id":            s.id,
-                    "fecha":         s.fecha,
-                    "magnitud":      s.magnitud,
-                    "profundidad_km":s.profundidad_km,
-                    "referencia":    s.referencia,
-                    "clasificacion": s.clasificacion,
+                    "id":             s.id,
+                    "fecha":          s.fecha,
+                    "magnitud":       s.magnitud,
+                    "profundidad_km": s.profundidad_km,
+                    "referencia":     s.referencia,
+                    "clasificacion":  s.clasificacion,
                 },
             })
-
         return {"type": "FeatureCollection", "features": features}
-    finally: db.close()
+    finally:
+        db.close()
 
 
 @app.get("/sismos/estadisticas")
 def estadisticas():
     db = SessionLocal()
     try:
-        total    = db.query(func.count(Sismo.id)).scalar()
-        max_mag  = db.query(func.max(Sismo.magnitud)).scalar()
-        avg_mag  = db.query(func.avg(Sismo.magnitud)).scalar()
-        avg_prof = db.query(func.avg(Sismo.profundidad_km)).scalar()
+        total      = db.query(func.count(Sismo.id)).scalar()
+        max_mag    = db.query(func.max(Sismo.magnitud)).scalar()
+        avg_mag    = db.query(func.avg(Sismo.magnitud)).scalar()
+        avg_prof   = db.query(func.avg(Sismo.profundidad_km)).scalar()
         con_coords = db.query(func.count(Sismo.id))\
                        .filter(Sismo.lat != None).scalar()
         return {
-            "total":            total,
-            "con_coordenadas":  con_coords,
-            "magnitud_maxima":  round(max_mag  or 0, 1),
-            "magnitud_promedio":round(avg_mag  or 0, 2),
-            "profundidad_prom": round(avg_prof or 0, 1),
+            "total":             total,
+            "con_coordenadas":   con_coords,
+            "magnitud_maxima":   round(max_mag  or 0, 1),
+            "magnitud_promedio": round(avg_mag  or 0, 2),
+            "profundidad_prom":  round(avg_prof or 0, 1),
         }
-    finally: db.close()
+    finally:
+        db.close()
+
+
+@app.get("/sismos/clasificacion/{nivel}")
+def por_clasificacion(nivel: str):
+    niveles_validos = ["micro", "menor", "ligero", "moderado", "fuerte", "mayor"]
+    if nivel not in niveles_validos:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Nivel inválido. Usa uno de: {niveles_validos}"
+        )
+    db = SessionLocal()
+    try:
+        rows = db.query(Sismo)\
+                 .filter(Sismo.clasificacion == nivel)\
+                 .order_by(Sismo.id.desc()).all()
+        return [sismo_a_dict(r) for r in rows]
+    finally:
+        db.close()
+
+
+# ⚠️ Este va AL FINAL porque {sismo_id} captura cualquier string
+@app.get("/sismos/{sismo_id}")
+def obtener_sismo(sismo_id: int):
+    db = SessionLocal()
+    try:
+        s = db.query(Sismo).filter(Sismo.id == sismo_id).first()
+        if not s:
+            raise HTTPException(status_code=404, detail="Sismo no encontrado")
+        return sismo_a_dict(s)
+    finally:
+        db.close()
 
 
 @app.post("/sismos/actualizar")
 def actualizar():
-    sismos    = obtener_sismos_con_coords()
-    insertados= guardar_sismos(sismos)
+    sismos     = obtener_sismos_con_coords()
+    insertados = guardar_sismos(sismos)
     return {"consultados": len(sismos), "nuevos": insertados}
