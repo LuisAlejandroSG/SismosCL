@@ -387,7 +387,7 @@
 
         async function cargarMapa() {
             try {
-                const res = await fetch('/api/geojson');
+                const res = await fetch('/api/sismos/geojson');
                 const data = await res.json();
 
                 if (geojsonLayer) mapa.removeLayer(geojsonLayer);
