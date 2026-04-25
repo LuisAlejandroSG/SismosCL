@@ -15,11 +15,11 @@ def index():
     return render_template("index.html",
                            sismos=sismos, stats=stats,
                            api_base=API_BASE)
-                           
+                            
 @app.route("/api/geojson")
 def geojson_proxy():
     try:
-        data = requests.get(f"{API_BASE}/sismos/geojson", timeout=5).json()
+        data = requests.get("http://127.0.0.1:8000/sismos/geojson", timeout=5).json()
         from flask import jsonify
         return jsonify(data)
     except:
