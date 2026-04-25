@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from typing import List
 from database import SessionLocal, Sismo, crear_tablas, guardar_sismos
 from fetch_sismos import obtener_sismos_con_coords
+from fastapi.exceptions import ResponseValidationError
+from fastapi.responses import JSONResponse
 
 app = FastAPI(
     title="API Sismos Chile",
@@ -37,6 +39,13 @@ class SismoOut(BaseModel):
 
 
 # ── Endpoints ───────────────────────────────────────────
+
+
+
+@app.exception_handler(ResponseValidationError)
+async def validation_exception_handler(request, exc):
+    print("VALIDATION ERROR:", exc.errors())
+    return JSONResponse(status_code=500, content={"detail": str(exc.errors())})
 
 @app.get("/")
 def health():
