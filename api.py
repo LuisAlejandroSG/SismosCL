@@ -11,6 +11,7 @@ app = FastAPI(
     title="API Sismos Chile",
     description="Datos del Centro Sismológico Nacional con coordenadas para mapas",
     version="2.0.0",
+    root_path="/api",
 )
 
 app.add_middleware(
